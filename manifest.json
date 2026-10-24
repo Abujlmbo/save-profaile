@@ -1,0 +1,8 @@
+{
+  "name": "Per Profile",
+  "description": "حفظ وتطبيق بروفايلات السيرفر",
+  "authors": [{ "name": "you" }],
+  "main": "index.js",
+  "hash": "",
+  "vendetta": { "icon": "ic_profile_24px" }
+}
