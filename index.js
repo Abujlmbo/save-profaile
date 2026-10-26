@@ -314,7 +314,7 @@
         }
         if (String(got) !== String(d.profile_effect_id)) {
           notes.push(
-            `الافكت ما انطبق: ديسكورد تجاهله وخلّى الحالي (${d.profile_effect_id}). غالباً الصيغة مختلفة، استخدم /spy_pr.`
+            `الافكت ما انطبق: ديسكورد تجاهله وخلّى الحالي (${d.profile_effect_id}). استخدم /spy_pr عشان نعرف الصيغة.`
           );
         }
       } catch (e) {
@@ -350,7 +350,7 @@
       if (!done) {
         notes.push(
           "ستايل الاسم ما انطبق" +
-            (lastErr ? ": " + errText(lastErr) : " (ديسكورد تجاهله، الـ endpoint أو الحقل مختلف، استخدم /spy_pr)")
+            (lastErr ? ": " + errText(lastErr) : " (ديسكورد تجاهله، استخدم /spy_pr عشان نعرف الصيغة)")
         );
       }
     }
@@ -814,56 +814,70 @@
     );
   };
 
-  // ===== تجسس موسّع على طلبات ديسكورد (للتشخيص) =====
+  // ===== تجسس v3 =====
   let spyOn = false;
   const spyLog = [];
   const spyPatches = [];
   const spyHooks = [];
   const FluxMod = safe(() => findByProps("dispatch", "subscribe"));
 
-  const NOISE = /\/(science|track|typing|ack|interactions|experiments|read-states)/i;
+  const NOISE = /\/(science|track|typing|ack|interactions|experiments|read-states|auth\/location)/i;
+  const KEY_RE = /display_name_styles|displayNameStyles|profile_effect|profileEffect|avatar_decoration|avatarDecoration|effect|font_id|nameplate/i;
+  const trunc = (s, n) => (String(s).length > n ? String(s).slice(0, n) + "…" : String(s));
 
-  const shorten = (_k, v) =>
-    typeof v === "string" && v.length > 80 ? v.slice(0, 40) + "…(" + v.length + ")" : v;
+  const pickKeys = (obj, path = "", depth = 0, out = []) => {
+    if (!obj || typeof obj !== "object" || depth > 6 || out.length > 12) return out;
+    for (const k of Object.keys(obj)) {
+      const p = path ? path + "." + k : k;
+      const v = obj[k];
+      if (KEY_RE.test(k)) {
+        let s = "";
+        try {
+          s = JSON.stringify(v);
+        } catch {}
+        out.push(p + " = " + trunc(s, 160));
+      } else if (v && typeof v === "object") {
+        pickKeys(v, p, depth + 1, out);
+      }
+    }
+    return out;
+  };
 
   const logReq = (src, method, url, body) => {
     if (!spyOn) return;
     url = String(url ?? "");
-    if (!url || NOISE.test(url)) return;
+    if (url && NOISE.test(url)) return;
     let b = "";
     try {
       b =
         typeof body === "string"
           ? body.replace(/data:[^"]{60,}/g, "<img>")
-          : JSON.stringify(body ?? null, shorten);
+          : JSON.stringify(body ?? null, (_k, v) =>
+              typeof v === "string" && v.length > 80 ? v.slice(0, 40) + "…" : v
+            );
     } catch {}
-    spyLog.push(`[${src}] ${method} ${url}\n${String(b).slice(0, 600)}`);
+    spyLog.push(`[${src}] ${method} ${url || "(؟)"}\n${trunc(b, 500)}`);
   };
 
+  // طبقة 1: موديولات الـ HTTP
   const mods = [];
   const addMod = (label, m) => {
-    if (!m) return;
-    if (typeof m !== "object" && typeof m !== "function") return;
+    if (!m || (typeof m !== "object" && typeof m !== "function")) return;
     if (mods.some((x) => x.m === m)) return;
     mods.push({ label, m });
   };
   addMod("RestAPI", RestAPI);
-  addMod("baseURL", safe(() => findByProps("getAPIBaseURL")));
-  addMod("verbs", safe(() => findByProps("post", "patch", "put")));
   addMod("HTTP", safe(() => findByProps("HTTP")?.HTTP));
-  addMod("request", safe(() => findByProps("request", "patch")));
 
   mods.forEach(({ label, m }) => {
-    ["patch", "put", "post", "del", "request"].forEach((fn) => {
+    ["patch", "put", "post"].forEach((fn) => {
       if (!patcher?.before || typeof m[fn] !== "function") return;
       try {
         spyPatches.push(
           patcher.before(fn, m, (args) => {
             const a = args[0] ?? {};
             if (typeof a === "string") return logReq(label, fn.toUpperCase(), a, args[1]);
-            const method = String(a.method ?? fn).toUpperCase();
-            if (method === "GET") return;
-            logReq(label, method, a.url, a.body);
+            logReq(label, String(a.method ?? fn).toUpperCase(), a.url, a.body);
           })
         );
         spyHooks.push(label + "." + fn);
@@ -871,7 +885,32 @@
     });
   });
 
-  // fetch المباشر
+  // طبقة 2: XMLHttpRequest (تلتقط أي طلب مهما كانت الدالة)
+  try {
+    const XP = globalThis.XMLHttpRequest?.prototype;
+    if (patcher?.before && XP) {
+      spyPatches.push(
+        patcher.before("open", XP, function (args) {
+          try {
+            this.__spy = { method: String(args[0]).toUpperCase(), url: String(args[1]) };
+          } catch {}
+        })
+      );
+      spyPatches.push(
+        patcher.before("send", XP, function (args) {
+          try {
+            const s = this?.__spy ?? {};
+            if (s.method === "GET") return;
+            if (args[0] == null && !s.url) return;
+            logReq("xhr", s.method ?? "؟", s.url, args[0]);
+          } catch {}
+        })
+      );
+      spyHooks.push("xhr.open", "xhr.send");
+    }
+  } catch {}
+
+  // طبقة 3: fetch
   try {
     if (patcher?.before && typeof globalThis.fetch === "function") {
       spyPatches.push(
@@ -888,19 +927,18 @@
     }
   } catch {}
 
-  // أحداث Flux الخاصة بالبروفايل
+  // أحداث Flux (نطبع الحقول المهمة فقط)
   try {
     if (patcher?.before && FluxMod?.dispatch) {
       spyPatches.push(
         patcher.before("dispatch", FluxMod, (args) => {
           if (!spyOn) return;
           const ev = args[0] ?? {};
-          if (/PROFILE|GUILD_MEMBER_UPDATE|CURRENT_USER_UPDATE|DISPLAY_NAME/.test(String(ev.type))) {
-            let b = "";
-            try {
-              b = JSON.stringify(ev, shorten);
-            } catch {}
-            spyLog.push(`[flux] ${ev.type}\n${b.slice(0, 500)}`);
+          const t = String(ev.type);
+          if (/RESET_PENDING|RESET_AND_CLOSE/.test(t)) return;
+          if (/PROFILE|GUILD_MEMBER_UPDATE|CURRENT_USER_UPDATE|DISPLAY_NAME/.test(t)) {
+            const found = pickKeys(ev);
+            spyLog.push(`[flux] ${t}\n` + (found.length ? found.join("\n") : "(ما فيه حقول مهمة)"));
           }
         })
       );
@@ -915,16 +953,17 @@
       spyLog.length = 0;
       return msg(
         ch,
-        "بدأ التجسس ✅\nhooks: " +
+        "بدأ التجسس v3 ✅\nhooks: " +
           (spyHooks.join(", ") || "ولا واحد") +
-          "\nالحين غيّر الافكت وستايل الاسم يدوياً من إعدادات بروفايل السيرفر واحفظ، وبعدها شغّل /spy_pr مرة ثانية."
+          "\nغيّر الافكت وستايل الاسم من إعدادات البروفايل واحفظ، وبعدها شغّل /spy_pr مرة ثانية."
       );
     }
     spyOn = false;
-    if (!spyLog.length) {
-      return msg(ch, "ما التقطت أي شي.\nhooks: " + (spyHooks.join(", ") || "ولا واحد"));
+    if (!spyLog.length) return msg(ch, "ما التقطت أي شي.");
+    const text = spyLog.join("\n\n");
+    for (let i = 0; i < text.length && i < 7200; i += 1800) {
+      msg(ch, text.slice(i, i + 1800));
     }
-    msg(ch, spyLog.slice(-8).join("\n\n").slice(0, 1900));
   };
 
   const opt = (name, desc, type, required) => ({
