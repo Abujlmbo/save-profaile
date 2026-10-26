@@ -32,9 +32,6 @@
   const ALERT_KEY = "vendetta-custom-alert";
   const OWN_KEY = "per-profiles-alert";
 
-  // لو true: ستايل الاسم يتطبق على حسابك كله كمحاولة أخيرة (مو بس السيرفر)
-  const ALLOW_GLOBAL_NAME_STYLE = false;
-
   const toast = (t) =>
     safe(() => vendetta.ui.toasts.showToast(String(t).slice(0, 120)));
 
@@ -203,7 +200,9 @@
   // ===== التطبيق =====
   const applyProfile = async (d, guildId) => {
     const notes = [];
+    const me = UserStore.getCurrentUser();
 
+    // 1) النك نيم
     if (d.nick) {
       try {
         await RestAPI.patch({
@@ -215,6 +214,7 @@
       }
     }
 
+    // 2) الأفتار
     if (d.avatar) {
       try {
         await RestAPI.patch({
@@ -230,10 +230,71 @@
       }
     }
 
-    // الديكوريشن (خاص بالسيرفر)
+    // 3) ستايل الاسم (الصيغة اللي التقطها التجسس: حقول مسطّحة)
+    if (d.display_name_styles) {
+      const st = d.display_name_styles;
+      try {
+        await RestAPI.patch({
+          url: `/guilds/${guildId}/members/@me`,
+          body: clean({
+            display_name_font_id: st.font_id,
+            display_name_effect_id: st.effect_id,
+            display_name_colors: st.colors,
+          }),
+        });
+        const r = await fetchProfile(me.id, guildId);
+        if (!sameStyle(readNameStyle(r.body), st)) {
+          notes.push("ستايل الاسم: ديسكورد قبل الطلب بس ما تغيّر (غالباً ما تملك الخط أو التأثير)");
+        }
+      } catch (e) {
+        notes.push("ستايل الاسم: " + errText(e));
+      }
+    }
+
+    // 4) البنر والألوان والبايو والضمائر
+    try {
+      await RestAPI.patch({
+        url: `/guilds/${guildId}/profile/@me`,
+        body: clean({
+          bio: d.bio,
+          pronouns: d.pronouns,
+          banner: d.banner,
+          accent_color: d.accent_color,
+          theme_colors: d.theme_colors,
+        }),
+      });
+    } catch (e) {
+      notes.push("البنر/الألوان/البايو: " + errText(e));
+    }
+
+    // 5) الافكت (عن طريق collectibles_sku_ids)
+    if (d.profile_effect_id) {
+      try {
+        await RestAPI.patch({
+          url: `/guilds/${guildId}/profile/@me`,
+          body: { collectibles_sku_ids: [String(d.profile_effect_id)] },
+        });
+        const got = await currentEffect(guildId);
+        if (String(got) !== String(d.profile_effect_id)) {
+          notes.push(`الافكت: ديسكورد قبل الطلب بس ما تغيّر (الحالي ${got ?? "ما فيه"})`);
+        }
+      } catch (e) {
+        notes.push("الافكت: " + errText(e));
+      }
+    }
+
+    // 6) الديكوريشن (خاص بالسيرفر)
     if (d.avatar_decoration?.asset) {
       const dec = d.avatar_decoration;
-      const attempts = [
+      const ids = [dec.sku_id, d.profile_effect_id].filter(Boolean).map(String);
+      const attempts = [];
+      if (dec.sku_id) {
+        attempts.push({
+          url: `/guilds/${guildId}/profile/@me`,
+          body: { collectibles_sku_ids: ids },
+        });
+      }
+      attempts.push(
         {
           url: `/guilds/${guildId}/members/@me`,
           body: {
@@ -247,22 +308,14 @@
         },
         {
           url: `/guilds/${guildId}/profile/@me`,
-          body: {
-            avatar_decoration_id: dec.sku_id ?? dec.asset,
-            avatar_decoration_sku_id: dec.sku_id,
-          },
-        },
-        {
-          url: `/guilds/${guildId}/profile/@me`,
           body: { avatar_decoration_data: { asset: dec.asset, sku_id: dec.sku_id } },
-        },
-      ];
+        }
+      );
       let done = false;
       let lastErr = null;
       for (const a of attempts) {
         try {
           await RestAPI.patch({ url: a.url, body: clean(a.body) });
-          const me = UserStore.getCurrentUser();
           const r = await fetchProfile(me.id, guildId);
           if (readGuildDecoration(r.body)?.asset === dec.asset) {
             done = true;
@@ -275,82 +328,7 @@
       if (!done) {
         notes.push(
           "الديكوريشن ما انطبق على السيرفر" +
-            (lastErr ? ": " + errText(lastErr) : " (غالباً ما تملكه)")
-        );
-      }
-    }
-
-    // البنر والألوان والبايو والافكت
-    try {
-      await RestAPI.patch({
-        url: `/guilds/${guildId}/profile/@me`,
-        body: clean({
-          bio: d.bio,
-          pronouns: d.pronouns,
-          banner: d.banner,
-          accent_color: d.accent_color,
-          theme_colors: d.theme_colors,
-          profile_effect_id: d.profile_effect_id,
-        }),
-      });
-    } catch (e) {
-      notes.push("البنر/الألوان/الافكت: " + errText(e));
-    }
-
-    // فحص الافكت + إعادة محاولة منفصلة
-    if (d.profile_effect_id) {
-      try {
-        let got = await currentEffect(guildId);
-        if (String(got) !== String(d.profile_effect_id)) {
-          try {
-            await RestAPI.patch({
-              url: `/guilds/${guildId}/profile/@me`,
-              body: { profile_effect_id: String(d.profile_effect_id) },
-            });
-          } catch (e) {
-            notes.push("الافكت (إعادة): " + errText(e));
-          }
-          got = await currentEffect(guildId);
-        }
-        if (String(got) !== String(d.profile_effect_id)) {
-          notes.push(
-            `الافكت ما انطبق: ديسكورد تجاهله وخلّى الحالي (${d.profile_effect_id}). استخدم /spy_pr عشان نعرف الصيغة.`
-          );
-        }
-      } catch (e) {
-        notes.push("فحص الافكت فشل: " + errText(e));
-      }
-    }
-
-    // ستايل الاسم
-    if (d.display_name_styles) {
-      const st = d.display_name_styles;
-      const attempts = [
-        { url: `/guilds/${guildId}/members/@me`, body: { display_name_styles: st } },
-        { url: `/guilds/${guildId}/profile/@me`, body: { display_name_styles: st } },
-      ];
-      if (ALLOW_GLOBAL_NAME_STYLE) {
-        attempts.push({ url: `/users/@me/profile`, body: { display_name_styles: st } });
-      }
-      let done = false;
-      let lastErr = null;
-      for (const a of attempts) {
-        try {
-          await RestAPI.patch({ url: a.url, body: a.body });
-          const me = UserStore.getCurrentUser();
-          const r = await fetchProfile(me.id, guildId);
-          if (sameStyle(readNameStyle(r.body), st)) {
-            done = true;
-            break;
-          }
-        } catch (e) {
-          lastErr = e;
-        }
-      }
-      if (!done) {
-        notes.push(
-          "ستايل الاسم ما انطبق" +
-            (lastErr ? ": " + errText(lastErr) : " (ديسكورد تجاهله، استخدم /spy_pr عشان نعرف الصيغة)")
+            (lastErr ? ": " + errText(lastErr) : " (ديسكورد تجاهله، جرّب /spy_pr وغيّر الديكوريشن يدوياً)")
         );
       }
     }
@@ -809,7 +787,6 @@
         "alertLib: " + !!AlertLib?.AlertModal,
         "openAlert: " + typeof AlertModule?.openAlert,
         "patcher.before: " + typeof patcher?.before,
-        "patcher.after: " + typeof patcher?.after,
       ].join("\n")
     );
   };
@@ -822,7 +799,7 @@
   const FluxMod = safe(() => findByProps("dispatch", "subscribe"));
 
   const NOISE = /\/(science|track|typing|ack|interactions|experiments|read-states|auth\/location)/i;
-  const KEY_RE = /display_name_styles|displayNameStyles|profile_effect|profileEffect|avatar_decoration|avatarDecoration|effect|font_id|nameplate/i;
+  const KEY_RE = /display_name_styles|displayNameStyles|profile_effect|profileEffect|avatar_decoration|avatarDecoration|effect|font_id|nameplate|collectibles/i;
   const trunc = (s, n) => (String(s).length > n ? String(s).slice(0, n) + "…" : String(s));
 
   const pickKeys = (obj, path = "", depth = 0, out = []) => {
@@ -859,7 +836,6 @@
     spyLog.push(`[${src}] ${method} ${url || "(؟)"}\n${trunc(b, 500)}`);
   };
 
-  // طبقة 1: موديولات الـ HTTP
   const mods = [];
   const addMod = (label, m) => {
     if (!m || (typeof m !== "object" && typeof m !== "function")) return;
@@ -885,7 +861,6 @@
     });
   });
 
-  // طبقة 2: XMLHttpRequest (تلتقط أي طلب مهما كانت الدالة)
   try {
     const XP = globalThis.XMLHttpRequest?.prototype;
     if (patcher?.before && XP) {
@@ -910,7 +885,6 @@
     }
   } catch {}
 
-  // طبقة 3: fetch
   try {
     if (patcher?.before && typeof globalThis.fetch === "function") {
       spyPatches.push(
@@ -927,7 +901,6 @@
     }
   } catch {}
 
-  // أحداث Flux (نطبع الحقول المهمة فقط)
   try {
     if (patcher?.before && FluxMod?.dispatch) {
       spyPatches.push(
@@ -953,9 +926,9 @@
       spyLog.length = 0;
       return msg(
         ch,
-        "بدأ التجسس v3 ✅\nhooks: " +
+        "بدأ التجسس ✅\nhooks: " +
           (spyHooks.join(", ") || "ولا واحد") +
-          "\nغيّر الافكت وستايل الاسم من إعدادات البروفايل واحفظ، وبعدها شغّل /spy_pr مرة ثانية."
+          "\nغيّر الشي اللي تبي تفحصه (مثلاً الديكوريشن) من إعدادات البروفايل واحفظ، وبعدها شغّل /spy_pr مرة ثانية."
       );
     }
     spyOn = false;
