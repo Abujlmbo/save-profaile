@@ -17,16 +17,19 @@
   const UserStore = safe(() => findByStoreName("UserStore"));
   const UserProfileStore = safe(() => findByStoreName("UserProfileStore"));
   const SelectedGuildStore = safe(() => findByStoreName("SelectedGuildStore"));
+  const GuildStore = safe(() => findByStoreName("GuildStore"));
+  const Flux = safe(() => findByProps("dispatch", "subscribe"));
   const BotMsg = safe(() => findByProps("sendBotMessage"));
   const sheetLib = safe(() => findByProps("openLazy", "hideActionSheet"));
   const AlertModule = safe(() => findByProps("openAlert", "dismissAlert"));
   const AlertLib = safe(() => findByProps("AlertModal", "AlertActions"));
-  const patcher = safe(() => vendetta.patcher);
 
-  const { View, Image, Text, ScrollView, TouchableOpacity, Dimensions } = RN;
+  const { View, Image, Text, ScrollView, TouchableOpacity, Dimensions, TextInput } = RN;
   const h = React.createElement;
 
   storage.profiles ??= {};
+  storage.newServer ??= { enabled: false, names: [] };
+  storage.newServer.names ??= [];
 
   const SHEET_KEY = "per-profiles";
   const ALERT_KEY = "vendetta-custom-alert";
@@ -69,6 +72,18 @@
     });
   };
 
+  // ===== إدارة البروفايلات (اسم/حذف) =====
+  const renameProfile = (oldName, newName) => {
+    storage.profiles[newName] = storage.profiles[oldName];
+    delete storage.profiles[oldName];
+    storage.newServer.names = storage.newServer.names.map((n) => (n === oldName ? newName : n));
+  };
+
+  const deleteProfile = (name) => {
+    delete storage.profiles[name];
+    storage.newServer.names = storage.newServer.names.filter((n) => n !== name);
+  };
+
   // ===== إغلاق النافذة =====
   const closeSheet = () => {
     const keys = [OWN_KEY, ALERT_KEY, "vendetta-alert", "custom-alert"];
@@ -108,14 +123,6 @@
     const src = body.guild_member?.avatar_decoration_data ?? null;
     if (!src?.asset) return null;
     return { asset: src.asset, sku_id: src.sku_id ?? src.skuId ?? null };
-  };
-
-  const readGlobalDecoration = (body, userId) => {
-    const src =
-      body.user?.avatar_decoration_data ??
-      safe(() => UserStore?.getUser?.(userId)?.avatarDecorationData) ??
-      null;
-    return src?.asset ? { asset: src.asset, sku_id: src.sku_id ?? src.skuId ?? null } : null;
   };
 
   const decoUrl = (asset) =>
@@ -230,7 +237,7 @@
       }
     }
 
-    // 3) ستايل الاسم (الصيغة اللي التقطها التجسس: حقول مسطّحة)
+    // 3) ستايل الاسم
     if (d.display_name_styles) {
       const st = d.display_name_styles;
       try {
@@ -267,7 +274,7 @@
       notes.push("البنر/الألوان/البايو: " + errText(e));
     }
 
-    // 5) الافكت (عن طريق collectibles_sku_ids)
+    // 5) الافكت
     if (d.profile_effect_id) {
       try {
         await RestAPI.patch({
@@ -328,21 +335,12 @@
       if (!done) {
         notes.push(
           "الديكوريشن ما انطبق على السيرفر" +
-            (lastErr ? ": " + errText(lastErr) : " (ديسكورد تجاهله، جرّب /spy_pr وغيّر الديكوريشن يدوياً)")
+            (lastErr ? ": " + errText(lastErr) : " (ديسكورد تجاهله، غيّر الديكوريشن يدوياً)")
         );
       }
     }
 
     return notes;
-  };
-
-  const listText = () => {
-    const names = Object.keys(storage.profiles);
-    if (!names.length) return "ما عندك بروفايلات محفوظة.";
-    return (
-      `بروفايلاتك المحفوظة (${names.length}):\n` +
-      names.map((n, i) => `${i + 1}. **${n}**`).join("\n")
-    );
   };
 
   // ===== واجهة البطاقة =====
@@ -357,6 +355,7 @@
     green: "#248046",
     red: "#da373c",
     gray: "#4e5058",
+    orange: "#c27c0e",
   };
 
   function ProfileCard({ d, name, W }) {
@@ -521,17 +520,27 @@
     );
   }
 
-  function Sheet({ guildId, channelId, mode }) {
+  // kind: "show" (عرض/تطبيق/تعديل/حذف) | "newserver" (اختيار بروفايلات السيرفر الجديد)
+  function Sheet({ guildId, channelId, mode, kind, initSel, initEdit }) {
     const W = Dimensions.get("window").width - (mode === "alert" ? 88 : 32);
-    const [sel, setSel] = React.useState(Object.keys(storage.profiles)[0] ?? null);
+    const startSel =
+      initSel && storage.profiles[initSel] ? initSel : Object.keys(storage.profiles)[0] ?? null;
+    const [sel, setSel] = React.useState(startSel);
     const [busy, setBusy] = React.useState(false);
     const [confirmDel, setConfirmDel] = React.useState(false);
     const [, bump] = React.useState(0);
     const [closed, setClosed] = React.useState(false);
+    const [editing, setEditing] = React.useState(!!initEdit && kind !== "newserver" && !!startSel);
+    const [nameIn, setNameIn] = React.useState(initEdit && startSel ? startSel : "");
+    const [nickIn, setNickIn] = React.useState(
+      initEdit && startSel ? storage.profiles[startSel]?.nick ?? "" : ""
+    );
 
     const names = Object.keys(storage.profiles);
     const current = sel && storage.profiles[sel] ? sel : names[0] ?? null;
     const d = current ? storage.profiles[current] : null;
+    const isNS = kind === "newserver";
+    const inList = (n) => storage.newServer.names.includes(n);
 
     const close = () => {
       closeSheet();
@@ -549,7 +558,176 @@
         h(Text, { style: { color: "#fff", fontSize: 15, fontWeight: "700" } }, text)
       );
 
+    const input = (key, title, value, onChange, placeholder) =>
+      h(View, { key, style: { marginBottom: 10 } }, [
+        h(Text, { key: "l", style: { color: C.sub, fontSize: 12, fontWeight: "700", marginBottom: 4 } }, title),
+        h(TextInput, {
+          key: "i",
+          value,
+          onChangeText: onChange,
+          placeholder,
+          placeholderTextColor: C.gray,
+          style: {
+            backgroundColor: C.box,
+            color: C.text,
+            borderRadius: 10,
+            borderWidth: 1,
+            borderColor: C.line,
+            paddingHorizontal: 12,
+            paddingVertical: 10,
+            fontSize: 15,
+          },
+        }),
+      ]);
+
+    const startEdit = () => {
+      setNameIn(current);
+      setNickIn(d?.nick ?? "");
+      setConfirmDel(false);
+      setEditing(true);
+    };
+
+    const saveEdit = () => {
+      const nn = nameIn.trim();
+      if (!nn) return toast("اسم البروفايل فاضي");
+      if (nn !== current && storage.profiles[nn]) return toast("فيه بروفايل بنفس الاسم");
+      storage.profiles[current].nick = nickIn.trim() || null;
+      let finalName = current;
+      if (nn !== current) {
+        renameProfile(current, nn);
+        finalName = nn;
+      }
+      setSel(finalName);
+      setEditing(false);
+      bump((x) => x + 1);
+      toast("تم حفظ التعديل ✅");
+    };
+
     if (closed) return h(View, { style: { height: 1 } });
+
+    const chips = h(
+      ScrollView,
+      { key: "chips", horizontal: true, showsHorizontalScrollIndicator: false, style: { flexGrow: 0, marginBottom: 12 } },
+      names.map((n) =>
+        h(
+          TouchableOpacity,
+          {
+            key: "chip-" + n,
+            onPress: () => {
+              setSel(n);
+              setConfirmDel(false);
+              setEditing(false);
+            },
+            style: {
+              backgroundColor: n === current ? C.blurple : C.box,
+              paddingVertical: 9,
+              paddingHorizontal: 16,
+              borderRadius: 20,
+              marginRight: 8,
+              borderWidth: 1,
+              borderColor: isNS && inList(n) ? C.green : n === current ? C.blurple : C.line,
+            },
+          },
+          h(Text, { style: { color: "#fff", fontWeight: "700" } }, (isNS && inList(n) ? "✓ " : "") + n)
+        )
+      )
+    );
+
+    let bottom;
+    if (isNS) {
+      bottom = [
+        h(
+          View,
+          { key: "btns1", style: { flexDirection: "row", marginTop: 14 } },
+          [
+            button(
+              "toggle",
+              inList(current) ? "إزالة من القائمة" : "إضافة للقائمة",
+              () => {
+                const arr = storage.newServer.names;
+                storage.newServer.names = arr.includes(current)
+                  ? arr.filter((n) => n !== current)
+                  : [...arr, current];
+                bump((x) => x + 1);
+              },
+              inList(current) ? C.orange : C.green
+            ),
+          ]
+        ),
+        h(
+          View,
+          { key: "btns2", style: { flexDirection: "row", marginTop: 8 } },
+          [
+            button(
+              "power",
+              storage.newServer.enabled ? "إيقاف" : "تشغيل",
+              () => {
+                storage.newServer.enabled = !storage.newServer.enabled;
+                bump((x) => x + 1);
+              },
+              storage.newServer.enabled ? C.red : C.blurple
+            ),
+            button("close", "إغلاق", close, C.gray),
+          ]
+        ),
+      ];
+    } else if (editing) {
+      bottom = [
+        h(
+          View,
+          { key: "form", style: { marginTop: 14 } },
+          [
+            input("n", "اسم البروفايل المحفوظ", nameIn, setNameIn, "اسم البروفايل"),
+            input("k", "الاسم المعروض في السيرفر (فاضي = ما يتغير)", nickIn, setNickIn, "displayName"),
+          ]
+        ),
+        h(
+          View,
+          { key: "btns", style: { flexDirection: "row" } },
+          [button("save", "حفظ", saveEdit, C.green), button("cancel", "إلغاء", () => setEditing(false), C.gray)]
+        ),
+      ];
+    } else {
+      bottom = [
+        h(
+          View,
+          { key: "btns", style: { flexDirection: "row", marginTop: 14 } },
+          [
+            button(
+              "apply",
+              busy ? "جاري التطبيق..." : "تطبيق",
+              async () => {
+                if (busy) return;
+                if (!guildId) {
+                  close();
+                  return msg(channelId, "ادخل سيرفر أول.");
+                }
+                setBusy(true);
+                const notes = await applyProfile(d, guildId);
+                setBusy(false);
+                close();
+                msg(channelId, `تم تطبيق **${current}** ✅` + (notes.length ? "\n" + notes.join("\n") : ""));
+              },
+              C.green
+            ),
+            button("edit", "تعديل", startEdit, C.blurple),
+            button(
+              "del",
+              confirmDel ? "تأكيد الحذف" : "حذف",
+              () => {
+                if (!confirmDel) return setConfirmDel(true);
+                deleteProfile(current);
+                setConfirmDel(false);
+                setSel(Object.keys(storage.profiles)[0] ?? null);
+                bump((x) => x + 1);
+              },
+              C.red
+            ),
+            button("close", "إغلاق", close, C.gray),
+          ]
+        ),
+      ];
+    }
 
     return h(
       View,
@@ -572,73 +750,20 @@
             h(View, { key: "r", style: { flexDirection: "row" } }, button("c", "إغلاق", close, C.gray)),
           ]
         : [
-            h(
-              ScrollView,
-              { key: "chips", horizontal: true, showsHorizontalScrollIndicator: false, style: { flexGrow: 0, marginBottom: 12 } },
-              names.map((n) =>
-                h(
-                  TouchableOpacity,
-                  {
-                    key: "chip-" + n,
-                    onPress: () => {
-                      setSel(n);
-                      setConfirmDel(false);
-                    },
-                    style: {
-                      backgroundColor: n === current ? C.blurple : C.box,
-                      paddingVertical: 9,
-                      paddingHorizontal: 16,
-                      borderRadius: 20,
-                      marginRight: 8,
-                      borderWidth: 1,
-                      borderColor: n === current ? C.blurple : C.line,
-                    },
-                  },
-                  h(Text, { style: { color: "#fff", fontWeight: "700" } }, n)
+            isNS
+              ? h(
+                  Text,
+                  { key: "hint", style: { color: C.sub, fontSize: 12, textAlign: "center", marginBottom: 10 } },
+                  `السيرفر الجديد: ${storage.newServer.enabled ? "مفعّل ✅" : "مطفي ⏹️"}  •  ✓ = ضمن القائمة (القائمة فاضية = كل بروفايلاتك)`
                 )
-              )
-            ),
+              : null,
+            chips,
             h(
               ScrollView,
               { key: "card", style: { flexGrow: 0 }, showsVerticalScrollIndicator: false },
               h(ProfileCard, { d, name: current, W })
             ),
-            h(
-              View,
-              { key: "btns", style: { flexDirection: "row", marginTop: 14 } },
-              [
-                button(
-                  "apply",
-                  busy ? "جاري التطبيق..." : "تطبيق",
-                  async () => {
-                    if (busy) return;
-                    if (!guildId) {
-                      close();
-                      return msg(channelId, "ادخل سيرفر أول.");
-                    }
-                    setBusy(true);
-                    const notes = await applyProfile(d, guildId);
-                    setBusy(false);
-                    close();
-                    msg(channelId, `تم تطبيق **${current}** ✅` + (notes.length ? "\n" + notes.join("\n") : ""));
-                  },
-                  C.green
-                ),
-                button(
-                  "del",
-                  confirmDel ? "تأكيد الحذف" : "حذف",
-                  () => {
-                    if (!confirmDel) return setConfirmDel(true);
-                    delete storage.profiles[current];
-                    setConfirmDel(false);
-                    setSel(Object.keys(storage.profiles)[0] ?? null);
-                    bump((x) => x + 1);
-                  },
-                  C.red
-                ),
-                button("close", "إغلاق", close, C.gray),
-              ]
-            ),
+            ...bottom,
           ]
     );
   }
@@ -654,10 +779,20 @@
     }
   };
 
-  const openSheet = (ctx) => {
+  const openSheet = (ctx, opts = {}) => {
     const ch = ctx.channel.id;
     const guildId = ctx.guild?.id ?? SelectedGuildStore?.getGuildId?.();
     const alerts = safe(() => vendetta.ui.alerts);
+    const kind = opts.kind ?? "show";
+    const title = kind === "newserver" ? "بروفايلات السيرفر الجديد" : "بروفايلاتك";
+    const mk = (mode) => ({
+      guildId,
+      channelId: ch,
+      mode,
+      kind,
+      initSel: opts.sel,
+      initEdit: opts.edit,
+    });
 
     try {
       if (AlertModule?.openAlert && AlertLib?.AlertModal) {
@@ -665,8 +800,8 @@
         AlertModule.openAlert(
           OWN_KEY,
           h(AlertModal, {
-            title: "بروفايلاتك",
-            extraContent: h(Sheet, { guildId, channelId: ch, mode: "alert" }),
+            title,
+            extraContent: h(Sheet, mk("alert")),
             actions:
               AlertActions && AlertActionButton
                 ? h(
@@ -683,7 +818,7 @@
 
     try {
       if (alerts?.showCustomAlert) {
-        alerts.showCustomAlert(Sheet, { guildId, channelId: ch, mode: "alert" });
+        alerts.showCustomAlert(Sheet, mk("alert"));
         return;
       }
     } catch (e) {}
@@ -691,12 +826,18 @@
     try {
       if (!sheetLib?.openLazy) throw new Error("no sheet");
       sheetLib.openLazy(
-        Promise.resolve({ default: () => h(Sheet, { guildId, channelId: ch, mode: "sheet" }) }),
+        Promise.resolve({ default: () => h(Sheet, mk("sheet")) }),
         SHEET_KEY,
         {}
       );
     } catch (e) {
-      msg(ch, listText());
+      const names = Object.keys(storage.profiles);
+      msg(
+        ch,
+        names.length
+          ? `بروفايلاتك المحفوظة (${names.length}):\n` + names.map((n, i) => `${i + 1}. **${n}**`).join("\n")
+          : "ما عندك بروفايلات محفوظة."
+      );
     }
   };
 
@@ -733,16 +874,52 @@
     if (!storage.profiles[oldName]) return msg(ch, `ما لقيت بروفايل اسمه ${oldName}`);
     if (!newName) return msg(ch, "اكتب الاسم الجديد.");
     if (storage.profiles[newName]) return msg(ch, `فيه بروفايل بنفس الاسم **${newName}**`);
-    storage.profiles[newName] = storage.profiles[oldName];
-    delete storage.profiles[oldName];
+    renameProfile(oldName, newName);
     msg(ch, `تم تغيير الاسم من **${oldName}** إلى **${newName}** ✅`);
+  };
+
+  // تعديل: الاسم المحفوظ و/أو الاسم المعروض (displayName)
+  const edit = async (args, ctx) => {
+    const ch = ctx.channel.id;
+    const name = getArg(args, "name");
+    const newName = getArg(args, "new_name");
+    const display = getArg(args, "display_name");
+    if (!storage.profiles[name]) return msg(ch, `ما لقيت بروفايل اسمه ${name}`);
+
+    // بدون خيارات = افتح واجهة التعديل
+    if (newName == null && display == null) {
+      return openSheet(ctx, { sel: name, edit: true });
+    }
+
+    const lines = [];
+    if (display != null) {
+      const v = String(display).trim();
+      storage.profiles[name].nick = v === "" || v === "-" ? null : v;
+      lines.push(
+        storage.profiles[name].nick
+          ? `الاسم المعروض: **${storage.profiles[name].nick}**`
+          : "الاسم المعروض: انمسح (ما يتغير عند التطبيق)"
+      );
+    }
+    let finalName = name;
+    if (newName != null && String(newName).trim() && newName !== name) {
+      const nn = String(newName).trim();
+      if (storage.profiles[nn]) {
+        lines.push(`ما انغيّر اسم البروفايل: فيه واحد بنفس الاسم **${nn}**`);
+      } else {
+        renameProfile(name, nn);
+        finalName = nn;
+        lines.push(`اسم البروفايل: **${name}** ← **${nn}**`);
+      }
+    }
+    msg(ch, `تم تعديل **${finalName}** ✅\n${lines.join("\n")}`);
   };
 
   const del = async (args, ctx) => {
     const ch = ctx.channel.id;
     const name = getArg(args, "name");
     if (!storage.profiles[name]) return msg(ch, `ما لقيت بروفايل اسمه ${name}`);
-    delete storage.profiles[name];
+    deleteProfile(name);
     msg(ch, `تم حذف **${name}** 🗑️`);
   };
 
@@ -767,185 +944,79 @@
     msg(ch, `أخذت بروفايل **${name}** ✅\n${savedSummary(data, avatarSrc)}${extra}`);
   };
 
-  const debug = async (args, ctx) => {
+  // بروفايل عشوائي من المحفوظين
+  const random = async (args, ctx) => {
     const ch = ctx.channel.id;
     const guildId = ctx.guild?.id;
-    const userId = getArg(args, "user") || UserStore.getCurrentUser().id;
-    const res = await fetchProfile(userId, guildId);
-    const b = res.body ?? {};
-    const j = (x) => (JSON.stringify(x ?? null) ?? "null").slice(0, 250);
-    msg(
-      ch,
-      [
-        "effect: " + j(readEffect(b, userId, guildId)),
-        "decoration(server): " + j(readGuildDecoration(b)),
-        "decoration(global): " + j(readGlobalDecoration(b, userId)),
-        "nameStyle(member): " + j(b.guild_member?.display_name_styles),
-        "nameStyle(user): " + j(b.user?.display_name_styles),
-        "nameStyle(result): " + j(readNameStyle(b)),
-        "sheet: " + !!sheetLib?.openLazy,
-        "alertLib: " + !!AlertLib?.AlertModal,
-        "openAlert: " + typeof AlertModule?.openAlert,
-        "patcher.before: " + typeof patcher?.before,
-      ].join("\n")
-    );
+    if (!guildId) return msg(ch, "ادخل سيرفر أول.");
+    const names = Object.keys(storage.profiles);
+    if (!names.length) return msg(ch, "ما عندك بروفايلات محفوظة.");
+    const name = names[Math.floor(Math.random() * names.length)];
+    const notes = await applyProfile(storage.profiles[name], guildId);
+    msg(ch, `🎲 طبّقت **${name}** ✅` + (notes.length ? "\n" + notes.join("\n") : ""));
   };
 
-  // ===== تجسس v3 =====
-  let spyOn = false;
-  const spyLog = [];
-  const spyPatches = [];
-  const spyHooks = [];
-  const FluxMod = safe(() => findByProps("dispatch", "subscribe"));
-
-  const NOISE = /\/(science|track|typing|ack|interactions|experiments|read-states|auth\/location)/i;
-  const KEY_RE = /display_name_styles|displayNameStyles|profile_effect|profileEffect|avatar_decoration|avatarDecoration|effect|font_id|nameplate|collectibles/i;
-  const trunc = (s, n) => (String(s).length > n ? String(s).slice(0, n) + "…" : String(s));
-
-  const pickKeys = (obj, path = "", depth = 0, out = []) => {
-    if (!obj || typeof obj !== "object" || depth > 6 || out.length > 12) return out;
-    for (const k of Object.keys(obj)) {
-      const p = path ? path + "." + k : k;
-      const v = obj[k];
-      if (KEY_RE.test(k)) {
-        let s = "";
-        try {
-          s = JSON.stringify(v);
-        } catch {}
-        out.push(p + " = " + trunc(s, 160));
-      } else if (v && typeof v === "object") {
-        pickKeys(v, p, depth + 1, out);
-      }
-    }
-    return out;
-  };
-
-  const logReq = (src, method, url, body) => {
-    if (!spyOn) return;
-    url = String(url ?? "");
-    if (url && NOISE.test(url)) return;
-    let b = "";
-    try {
-      b =
-        typeof body === "string"
-          ? body.replace(/data:[^"]{60,}/g, "<img>")
-          : JSON.stringify(body ?? null, (_k, v) =>
-              typeof v === "string" && v.length > 80 ? v.slice(0, 40) + "…" : v
-            );
-    } catch {}
-    spyLog.push(`[${src}] ${method} ${url || "(؟)"}\n${trunc(b, 500)}`);
-  };
-
-  const mods = [];
-  const addMod = (label, m) => {
-    if (!m || (typeof m !== "object" && typeof m !== "function")) return;
-    if (mods.some((x) => x.m === m)) return;
-    mods.push({ label, m });
-  };
-  addMod("RestAPI", RestAPI);
-  addMod("HTTP", safe(() => findByProps("HTTP")?.HTTP));
-
-  mods.forEach(({ label, m }) => {
-    ["patch", "put", "post"].forEach((fn) => {
-      if (!patcher?.before || typeof m[fn] !== "function") return;
-      try {
-        spyPatches.push(
-          patcher.before(fn, m, (args) => {
-            const a = args[0] ?? {};
-            if (typeof a === "string") return logReq(label, fn.toUpperCase(), a, args[1]);
-            logReq(label, String(a.method ?? fn).toUpperCase(), a.url, a.body);
-          })
-        );
-        spyHooks.push(label + "." + fn);
-      } catch {}
-    });
-  });
-
-  try {
-    const XP = globalThis.XMLHttpRequest?.prototype;
-    if (patcher?.before && XP) {
-      spyPatches.push(
-        patcher.before("open", XP, function (args) {
-          try {
-            this.__spy = { method: String(args[0]).toUpperCase(), url: String(args[1]) };
-          } catch {}
-        })
-      );
-      spyPatches.push(
-        patcher.before("send", XP, function (args) {
-          try {
-            const s = this?.__spy ?? {};
-            if (s.method === "GET") return;
-            if (args[0] == null && !s.url) return;
-            logReq("xhr", s.method ?? "؟", s.url, args[0]);
-          } catch {}
-        })
-      );
-      spyHooks.push("xhr.open", "xhr.send");
-    }
-  } catch {}
-
-  try {
-    if (patcher?.before && typeof globalThis.fetch === "function") {
-      spyPatches.push(
-        patcher.before("fetch", globalThis, (args) => {
-          const input = args[0];
-          const init = args[1];
-          const url = typeof input === "string" ? input : input?.url;
-          const method = String(init?.method ?? input?.method ?? "GET").toUpperCase();
-          if (method === "GET" || !String(url).includes("discord")) return;
-          logReq("fetch", method, url, init?.body);
-        })
-      );
-      spyHooks.push("fetch");
-    }
-  } catch {}
-
-  try {
-    if (patcher?.before && FluxMod?.dispatch) {
-      spyPatches.push(
-        patcher.before("dispatch", FluxMod, (args) => {
-          if (!spyOn) return;
-          const ev = args[0] ?? {};
-          const t = String(ev.type);
-          if (/RESET_PENDING|RESET_AND_CLOSE/.test(t)) return;
-          if (/PROFILE|GUILD_MEMBER_UPDATE|CURRENT_USER_UPDATE|DISPLAY_NAME/.test(t)) {
-            const found = pickKeys(ev);
-            spyLog.push(`[flux] ${t}\n` + (found.length ? found.join("\n") : "(ما فيه حقول مهمة)"));
-          }
-        })
-      );
-      spyHooks.push("flux.dispatch");
-    }
-  } catch {}
-
-  const spy = async (args, ctx) => {
+  // تشغيل/إيقاف اختيار بروفايل للسيرفرات الجديدة
+  const newserver = async (args, ctx) => {
     const ch = ctx.channel.id;
-    if (!spyOn) {
-      spyOn = true;
-      spyLog.length = 0;
-      return msg(
-        ch,
-        "بدأ التجسس ✅\nhooks: " +
-          (spyHooks.join(", ") || "ولا واحد") +
-          "\nغيّر الشي اللي تبي تفحصه (مثلاً الديكوريشن) من إعدادات البروفايل واحفظ، وبعدها شغّل /spy_pr مرة ثانية."
-      );
+    const mode = getArg(args, "mode");
+    if (mode === "off") {
+      storage.newServer.enabled = false;
+      return msg(ch, "تم إيقاف البروفايل التلقائي للسيرفرات الجديدة ⏹️");
     }
-    spyOn = false;
-    if (!spyLog.length) return msg(ch, "ما التقطت أي شي.");
-    const text = spyLog.join("\n\n");
-    for (let i = 0; i < text.length && i < 7200; i += 1800) {
-      msg(ch, text.slice(i, i + 1800));
-    }
+    if (!Object.keys(storage.profiles).length) return msg(ch, "ما عندك بروفايلات محفوظة.");
+    if (mode === "on") storage.newServer.enabled = true;
+    openSheet(ctx, { kind: "newserver" });
   };
 
-  const opt = (name, desc, type, required) => ({
+  // ===== اكتشاف السيرفر الجديد =====
+  const knownGuilds = new Set(Object.keys(safe(() => GuildStore?.getGuilds?.(), {}) ?? {}));
+
+  const onGuildCreate = (ev) => {
+    try {
+      const g = ev?.guild;
+      const id = g?.id;
+      if (!id || knownGuilds.has(id)) return;
+      knownGuilds.add(id);
+
+      // لو السيرفر قديم (إعادة اتصال) ما نعتبره جديد
+      if (g.joined_at) {
+        const age = Date.now() - new Date(g.joined_at).getTime();
+        if (age > 5 * 60 * 1000) return;
+      }
+      if (!storage.newServer.enabled) return;
+
+      const all = Object.keys(storage.profiles);
+      let pool = storage.newServer.names.filter((n) => storage.profiles[n]);
+      if (!pool.length) pool = all;
+      if (!pool.length) return;
+
+      const name = pool[Math.floor(Math.random() * pool.length)];
+      setTimeout(async () => {
+        try {
+          const notes = await applyProfile(storage.profiles[name], id);
+          toast(
+            `سيرفر جديد: طبّقت ${name}` + (notes.length ? " (مع ملاحظات)" : " ✅")
+          );
+        } catch (e) {
+          toast("فشل تطبيق بروفايل السيرفر الجديد");
+        }
+      }, 3000);
+    } catch {}
+  };
+
+  safe(() => Flux?.subscribe?.("GUILD_CREATE", onGuildCreate));
+
+  const opt = (name, desc, type, required, choices) => ({
     name,
     displayName: name,
     description: desc,
     displayDescription: desc,
     type,
     required,
+    ...(choices
+      ? { choices: choices.map((c) => ({ name: c, displayName: c, value: c })) }
+      : {}),
   });
 
   const base = { applicationId: "-1", inputType: 1, type: 1 };
@@ -972,6 +1043,16 @@
   cmd("set_pr", "طبّق بروفايل محفوظ", [opt("name", "اسم البروفايل", 3, false)], apply);
   cmd("show_per", "اعرض بروفايلاتك كبطاقات", [], show);
   cmd(
+    "edit_per",
+    "عدّل بروفايل محفوظ (الاسم المحفوظ أو الاسم المعروض)",
+    [
+      opt("name", "اسم البروفايل", 3, true),
+      opt("new_name", "اسم البروفايل الجديد (اختياري)", 3, false),
+      opt("display_name", "الاسم المعروض displayName (اكتب - للمسح)", 3, false),
+    ],
+    edit
+  );
+  cmd(
     "rename_pr",
     "غيّر اسم بروفايل محفوظ",
     [opt("name", "الاسم الحالي", 3, true), opt("new_name", "الاسم الجديد", 3, true)],
@@ -988,13 +1069,18 @@
     ],
     stole
   );
-  cmd("debug_pr", "فحص حقول البروفايل", [opt("user", "الشخص (اختياري)", 6, false)], debug);
-  cmd("spy_pr", "تشخيص: التقط طلبات ديسكورد", [], spy);
+  cmd("random_per", "طبّق بروفايل عشوائي من بروفايلاتك", [], random);
+  cmd(
+    "newserver_per",
+    "اختر بروفايل تلقائياً عند دخول سيرفر جديد",
+    [opt("mode", "on لتشغيل واختيار القائمة، off للإيقاف", 3, false, ["on", "off"])],
+    newserver
+  );
 
   return {
     onUnload: () => {
       unregs.forEach((u) => safe(() => u()));
-      spyPatches.forEach((p) => safe(() => p()));
+      safe(() => Flux?.unsubscribe?.("GUILD_CREATE", onGuildCreate));
       safe(() => closeSheet());
     },
   };
