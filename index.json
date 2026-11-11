@@ -13,7 +13,7 @@
       },
       "versions": {
         "1.0.0": {
-          "url": "https://abujlmbo.github.io/save-profaile/abujlmbo.per-profile@1.0.0.zip",
+          "url": "https://abujlmbo.github.io/save-profaile/abujlmbo.per-profile@1.0.0%20(1).zip",
           "sha256": "550ee01bc636c7af3593cf0ee2a76934a97999a823544c2229b90756bf3394ea",
           "size": 8088,
           "dependencies": {
@@ -28,4 +28,4 @@
       }
     }
   }
-      }
+}
