@@ -970,17 +970,40 @@
     openSheet(ctx, { kind: "newserver" });
   };
 
+  const PROFILES = () => storage.profiles;
+  const SAVE = (n, d) => {
+    storage.profiles[n] = d;
+  };
+  const copyText = (t) =>
+    safe(() => {
+      const cb =
+        safe(() => vendetta.metro.common.clipboard) ??
+        safe(() => findByProps("setString", "getString")) ??
+        RN.Clipboard;
+      cb.setString(t);
+      return true;
+    }, false);
+
   // ===== المفاتيح (مشاركة البروفايلات) =====
-  const B64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-  const b64enc = (str) => {
+  // المفتاح = JSON مضغوط (LZW) ثم base64 ثم مقسوم لأجزاء كل جزء أقل من 2000 حرف
+  const utf8Bytes = (str) => {
     const enc = encodeURIComponent(str);
-    const bytes = [];
+    const out = [];
     for (let i = 0; i < enc.length; i++) {
       if (enc[i] === "%") {
-        bytes.push(parseInt(enc.substr(i + 1, 2), 16));
+        out.push(parseInt(enc.substr(i + 1, 2), 16));
         i += 2;
-      } else bytes.push(enc.charCodeAt(i));
+      } else out.push(enc.charCodeAt(i));
     }
+    return out;
+  };
+  const bytesUtf8 = (bytes) => {
+    let s = "";
+    for (const b of bytes) s += "%" + ("0" + b.toString(16)).slice(-2);
+    return decodeURIComponent(s);
+  };
+  const B64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  const b64FromBytes = (bytes) => {
     let out = "";
     for (let j = 0; j < bytes.length; j += 3) {
       const a = bytes[j], b = bytes[j + 1], c = bytes[j + 2];
@@ -992,7 +1015,7 @@
     }
     return out;
   };
-  const b64dec = (str) => {
+  const b64ToBytes = (str) => {
     str = str.replace(/[^A-Za-z0-9+\/]/g, "");
     const bytes = [];
     let buf = 0, bits = 0;
@@ -1005,51 +1028,118 @@
         buf &= (1 << bits) - 1;
       }
     }
-    let out = "";
-    for (const b of bytes) out += "%" + ("0" + b.toString(16)).slice(-2);
-    return decodeURIComponent(out);
+    return bytes;
   };
 
-  const KEY_PREFIX = "PP1:";
+  const lzwEnc = (bytes) => {
+    const dict = new Map();
+    let size = 256;
+    let w = "";
+    const out = [];
+    const code = (s) => (s.length === 1 ? s.charCodeAt(0) : dict.get(s));
+    for (const b of bytes) {
+      const c = String.fromCharCode(b);
+      const wc = w + c;
+      if (wc.length === 1 || dict.has(wc)) w = wc;
+      else {
+        out.push(code(w));
+        if (size < 4096) dict.set(wc, size++);
+        w = c;
+      }
+    }
+    if (w) out.push(code(w));
+    return out;
+  };
+  const lzwDec = (codes) => {
+    if (!codes.length) return [];
+    const dict = [];
+    for (let i = 0; i < 256; i++) dict[i] = String.fromCharCode(i);
+    let size = 256;
+    let w = dict[codes[0]];
+    const out = [w];
+    for (let i = 1; i < codes.length; i++) {
+      const k = codes[i];
+      let entry;
+      if (dict[k] !== undefined) entry = dict[k];
+      else if (k === size) entry = w + w[0];
+      else throw new Error("bad lzw");
+      out.push(entry);
+      if (size < 4096) dict[size++] = w + entry[0];
+      w = entry;
+    }
+    const s = out.join("");
+    const bytes = [];
+    for (let i = 0; i < s.length; i++) bytes.push(s.charCodeAt(i));
+    return bytes;
+  };
+  const packCodes = (codes) => {
+    const n = codes.length;
+    const bytes = [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+    for (let i = 0; i < n; i += 2) {
+      const a = codes[i];
+      const b = i + 1 < n ? codes[i + 1] : 0;
+      bytes.push(a >> 4, ((a & 15) << 4) | (b >> 8), b & 255);
+    }
+    return bytes;
+  };
+  const unpackCodes = (bytes) => {
+    const n = (bytes[0] << 16) | (bytes[1] << 8) | bytes[2];
+    const codes = [];
+    for (let i = 3; i < bytes.length && codes.length < n; i += 3) {
+      const x = bytes[i], y = bytes[i + 1] || 0, z = bytes[i + 2] || 0;
+      codes.push((x << 4) | (y >> 4));
+      if (codes.length < n) codes.push(((y & 15) << 8) | z);
+    }
+    return codes;
+  };
+
+  const shortUrl = (u) =>
+    typeof u === "string" ? u.replace(/^https:\/\/cdn\.discordapp\.com\//, "").replace(/\?size=1024$/, "") : u;
+  const longUrl = (u) =>
+    typeof u === "string" && !/^https?:/.test(u) ? "https://cdn.discordapp.com/" + u + "?size=1024" : u;
+
+  const PART_SIZE = 1850;
 
   const makeKey = (name) => {
-    const names = name ? [name] : Object.keys(storage.profiles);
+    const all = PROFILES();
+    const names = name ? [name] : Object.keys(all);
     if (!names.length) throw new Error("ما عندك بروفايلات محفوظة");
     const pack = {};
     let noImg = 0;
     for (const n of names) {
-      const d = storage.profiles[n];
+      const d = all[n];
       if (!d) throw new Error("ما لقيت بروفايل " + n);
       const o = {};
       for (const k of Object.keys(d)) {
         if (k === "avatar" || k === "banner") continue;
         const v = d[k];
         if (v === null || v === undefined || v === "" || (Array.isArray(v) && !v.length)) continue;
-        o[k] = v;
+        o[k] = k === "avatarUrl" || k === "bannerUrl" ? shortUrl(v) : v;
       }
       if ((d.avatar && !d.avatarUrl) || (d.banner && !d.bannerUrl)) noImg++;
       pack[n] = o;
     }
-    return { key: KEY_PREFIX + b64enc(JSON.stringify({ v: 1, p: pack })), count: names.length, noImg };
+    const payload = b64FromBytes(packCodes(lzwEnc(utf8Bytes(JSON.stringify({ v: 2, p: pack })))));
+    const id = Math.random().toString(36).slice(2, 6);
+    const total = Math.max(1, Math.ceil(payload.length / PART_SIZE));
+    const parts = [];
+    for (let i = 0; i < total; i++) {
+      parts.push(`PP2.${id}.${i + 1}.${total}:` + payload.slice(i * PART_SIZE, (i + 1) * PART_SIZE));
+    }
+    return { parts, count: names.length, noImg };
   };
 
-  const importKey = async (key) => {
-    key = String(key || "").trim();
-    if (key.indexOf(KEY_PREFIX) !== 0) throw new Error("المفتاح غير صحيح (لازم يبدأ بـ PP1:)");
-    let obj;
-    try {
-      obj = JSON.parse(b64dec(key.slice(KEY_PREFIX.length)));
-    } catch {
-      throw new Error("المفتاح تالف أو ناقص، انسخه كامل");
-    }
-    if (!obj?.p || typeof obj.p !== "object") throw new Error("المفتاح فاضي");
+  const importObj = async (obj) => {
+    if (!obj || !obj.p || typeof obj.p !== "object") throw new Error("المفتاح فاضي");
     const added = [];
     const notes = [];
     for (const n of Object.keys(obj.p)) {
       const d = { ...obj.p[n] };
+      if (d.avatarUrl) d.avatarUrl = longUrl(d.avatarUrl);
+      if (d.bannerUrl) d.bannerUrl = longUrl(d.bannerUrl);
       let finalName = n;
       let c = 2;
-      while (storage.profiles[finalName]) finalName = `${n} (${c++})`;
+      while (PROFILES()[finalName]) finalName = `${n} (${c++})`;
       try {
         if (d.avatarUrl) d.avatar = await toDataURI(d.avatarUrl);
       } catch {
@@ -1060,21 +1150,70 @@
       } catch {
         notes.push(finalName + ": تعذّر تحميل البنر");
       }
-      storage.profiles[finalName] = d;
+      SAVE(finalName, d);
       added.push(finalName);
     }
     return `تم أخذ ${added.length} بروفايل ✅\n${added.join("، ")}` + (notes.length ? "\n" + notes.join("\n") : "");
   };
 
-  const copyText = (t) =>
-    safe(() => {
-      const cb =
-        safe(() => vendetta.metro.common.clipboard) ??
-        safe(() => findByProps("setString", "getString")) ??
-        RN.Clipboard;
-      cb.setString(t);
-      return true;
-    }, false);
+  const pendingKeys = {};
+
+  // يقبل جزء أو أكثر (مفصولة بمسافة أو سطر)، ويستورد لما تكتمل كل الأجزاء
+  const feedKeys = async (input) => {
+    const text = String(input || "");
+    const re2 = /PP2\.([A-Za-z0-9]{3,8})\.(\d+)\.(\d+):((?:(?!PP2\.[A-Za-z0-9]{3,8}\.\d+\.\d+:)[A-Za-z0-9+\/=])+)/g;
+    const lines = [];
+    const touched = [];
+    let found = false;
+    let m;
+    while ((m = re2.exec(text))) {
+      found = true;
+      const id = m[1];
+      if (!pendingKeys[id]) pendingKeys[id] = { n: parseInt(m[3], 10), parts: {} };
+      pendingKeys[id].parts[parseInt(m[2], 10)] = m[4];
+      if (touched.indexOf(id) < 0) touched.push(id);
+    }
+    for (const id of touched) {
+      const p = pendingKeys[id];
+      const missing = [];
+      for (let i = 1; i <= p.n; i++) if (!p.parts[i]) missing.push(i);
+      if (missing.length) {
+        lines.push(`استلمت ${p.n - missing.length} من ${p.n} أجزاء. ناقص: ${missing.join("، ")}\nأرسل الباقي بنفس الأمر (Insert the key).`);
+        continue;
+      }
+      let payload = "";
+      for (let i = 1; i <= p.n; i++) payload += p.parts[i];
+      delete pendingKeys[id];
+      let obj;
+      try {
+        obj = JSON.parse(bytesUtf8(lzwDec(unpackCodes(b64ToBytes(payload)))));
+      } catch {
+        lines.push("المفتاح تالف، تأكد إنك نسخت كل الأجزاء كاملة");
+        continue;
+      }
+      lines.push(await importObj(obj));
+    }
+    const m1 = text.match(/PP1:([A-Za-z0-9+\/=]+)/);
+    if (m1) {
+      found = true;
+      let obj;
+      try {
+        obj = JSON.parse(bytesUtf8(b64ToBytes(m1[1])));
+      } catch {
+        throw new Error("المفتاح القديم تالف أو ناقص");
+      }
+      lines.push(await importObj(obj));
+    }
+    if (!found) throw new Error("ما لقيت مفتاح صحيح في النص (لازم يبدأ بـ PP2.)");
+    return lines.join("\n");
+  };
+
+  const keyTakeText = (r) =>
+    `مفتاح ${r.count} بروفايل في ${r.parts.length} ${r.parts.length > 1 ? "أجزاء" : "جزء"}.` +
+    (r.parts.length > 1
+      ? "\nأرسل الأجزاء بالترتيب (كل جزء رسالة)، وللنسخ اضغط مطوّلاً على الرسالة."
+      : "\nاننسخ للحافظة.") +
+    (r.noImg ? `\n⚠️ ${r.noImg} بروفايل بدون روابط صور، احفظه من جديد عشان تنتقل صوره.` : "");
 
   // take key = خذ مفتاح | Insert the key = أدخل مفتاح
   const keyper = async (args, ctx) => {
@@ -1082,16 +1221,13 @@
     const action = getArg(args, "action");
     if (action === "Insert the key") {
       const k = getArg(args, "key");
-      if (!k) return msg(ch, "الصق المفتاح في خيار key.");
-      return msg(ch, await importKey(k));
+      if (!k) return msg(ch, "الصق المفتاح (أو الجزء) في خيار key.");
+      return msg(ch, await feedKeys(k));
     }
     const r = makeKey(getArg(args, "name") || null);
-    const copied = copyText(r.key);
-    msg(
-      ch,
-      `مفتاح ${r.count} بروفايل${copied ? " (اننسخ للحافظة)" : ""}:\n\`${r.key}\`` +
-        (r.noImg ? `\n⚠️ ${r.noImg} بروفايل بدون روابط صور، احفظه من جديد عشان تنتقل صوره.` : "")
-    );
+    if (r.parts.length === 1) copyText(r.parts[0]);
+    msg(ch, keyTakeText(r));
+    r.parts.forEach((part) => msg(ch, "`" + part + "`"));
   };
 
   // ===== اكتشاف السيرفر الجديد =====
