@@ -1,0 +1,11 @@
+{
+  "name": "My Plugins",
+  "description": "My plugins for Valenced",
+  "plugins": [
+    {
+      "name": "Per Profile",
+      "description": "حفظ وتطبيق بروفايلات السيرفر",
+      "url": "https://abujlmbo.github.io/save-profaile/"
+    }
+  ]
+}
