@@ -47,6 +47,7 @@
 
   const errText = (e) => {
     try {
+      if (e && !e.body && e.message) return String(e.message).slice(0, 500);
       const b = e?.body ?? e;
       return `${e?.status ?? ""} ${JSON.stringify(b) ?? e?.message ?? e}`.slice(0, 500);
     } catch {
@@ -969,6 +970,130 @@
     openSheet(ctx, { kind: "newserver" });
   };
 
+  // ===== المفاتيح (مشاركة البروفايلات) =====
+  const B64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  const b64enc = (str) => {
+    const enc = encodeURIComponent(str);
+    const bytes = [];
+    for (let i = 0; i < enc.length; i++) {
+      if (enc[i] === "%") {
+        bytes.push(parseInt(enc.substr(i + 1, 2), 16));
+        i += 2;
+      } else bytes.push(enc.charCodeAt(i));
+    }
+    let out = "";
+    for (let j = 0; j < bytes.length; j += 3) {
+      const a = bytes[j], b = bytes[j + 1], c = bytes[j + 2];
+      out +=
+        B64[a >> 2] +
+        B64[((a & 3) << 4) | ((b || 0) >> 4)] +
+        (b === undefined ? "=" : B64[((b & 15) << 2) | ((c || 0) >> 6)]) +
+        (c === undefined ? "=" : B64[c & 63]);
+    }
+    return out;
+  };
+  const b64dec = (str) => {
+    str = str.replace(/[^A-Za-z0-9+\/]/g, "");
+    const bytes = [];
+    let buf = 0, bits = 0;
+    for (let i = 0; i < str.length; i++) {
+      buf = (buf << 6) | B64.indexOf(str[i]);
+      bits += 6;
+      if (bits >= 8) {
+        bits -= 8;
+        bytes.push((buf >> bits) & 255);
+        buf &= (1 << bits) - 1;
+      }
+    }
+    let out = "";
+    for (const b of bytes) out += "%" + ("0" + b.toString(16)).slice(-2);
+    return decodeURIComponent(out);
+  };
+
+  const KEY_PREFIX = "PP1:";
+
+  const makeKey = (name) => {
+    const names = name ? [name] : Object.keys(storage.profiles);
+    if (!names.length) throw new Error("ما عندك بروفايلات محفوظة");
+    const pack = {};
+    let noImg = 0;
+    for (const n of names) {
+      const d = storage.profiles[n];
+      if (!d) throw new Error("ما لقيت بروفايل " + n);
+      const o = {};
+      for (const k of Object.keys(d)) {
+        if (k === "avatar" || k === "banner") continue;
+        const v = d[k];
+        if (v === null || v === undefined || v === "" || (Array.isArray(v) && !v.length)) continue;
+        o[k] = v;
+      }
+      if ((d.avatar && !d.avatarUrl) || (d.banner && !d.bannerUrl)) noImg++;
+      pack[n] = o;
+    }
+    return { key: KEY_PREFIX + b64enc(JSON.stringify({ v: 1, p: pack })), count: names.length, noImg };
+  };
+
+  const importKey = async (key) => {
+    key = String(key || "").trim();
+    if (key.indexOf(KEY_PREFIX) !== 0) throw new Error("المفتاح غير صحيح (لازم يبدأ بـ PP1:)");
+    let obj;
+    try {
+      obj = JSON.parse(b64dec(key.slice(KEY_PREFIX.length)));
+    } catch {
+      throw new Error("المفتاح تالف أو ناقص، انسخه كامل");
+    }
+    if (!obj?.p || typeof obj.p !== "object") throw new Error("المفتاح فاضي");
+    const added = [];
+    const notes = [];
+    for (const n of Object.keys(obj.p)) {
+      const d = { ...obj.p[n] };
+      let finalName = n;
+      let c = 2;
+      while (storage.profiles[finalName]) finalName = `${n} (${c++})`;
+      try {
+        if (d.avatarUrl) d.avatar = await toDataURI(d.avatarUrl);
+      } catch {
+        notes.push(finalName + ": تعذّر تحميل الأفتار");
+      }
+      try {
+        if (d.bannerUrl) d.banner = await toDataURI(d.bannerUrl);
+      } catch {
+        notes.push(finalName + ": تعذّر تحميل البنر");
+      }
+      storage.profiles[finalName] = d;
+      added.push(finalName);
+    }
+    return `تم أخذ ${added.length} بروفايل ✅\n${added.join("، ")}` + (notes.length ? "\n" + notes.join("\n") : "");
+  };
+
+  const copyText = (t) =>
+    safe(() => {
+      const cb =
+        safe(() => vendetta.metro.common.clipboard) ??
+        safe(() => findByProps("setString", "getString")) ??
+        RN.Clipboard;
+      cb.setString(t);
+      return true;
+    }, false);
+
+  // take key = خذ مفتاح | Insert the key = أدخل مفتاح
+  const keyper = async (args, ctx) => {
+    const ch = ctx.channel.id;
+    const action = getArg(args, "action");
+    if (action === "Insert the key") {
+      const k = getArg(args, "key");
+      if (!k) return msg(ch, "الصق المفتاح في خيار key.");
+      return msg(ch, await importKey(k));
+    }
+    const r = makeKey(getArg(args, "name") || null);
+    const copied = copyText(r.key);
+    msg(
+      ch,
+      `مفتاح ${r.count} بروفايل${copied ? " (اننسخ للحافظة)" : ""}:\n\`${r.key}\`` +
+        (r.noImg ? `\n⚠️ ${r.noImg} بروفايل بدون روابط صور، احفظه من جديد عشان تنتقل صوره.` : "")
+    );
+  };
+
   // ===== اكتشاف السيرفر الجديد =====
   const knownGuilds = new Set(Object.keys(safe(() => GuildStore?.getGuilds?.(), {}) ?? {}));
 
@@ -1075,6 +1200,17 @@
     "اختر بروفايل تلقائياً عند دخول سيرفر جديد",
     [opt("mode", "on لتشغيل واختيار القائمة، off للإيقاف", 3, false, ["on", "off"])],
     newserver
+  );
+
+  cmd(
+    "key_per",
+    "شارك بروفايلاتك بمفتاح: take key لأخذ مفتاح، Insert the key لإدخال مفتاح",
+    [
+      opt("action", "اختر العملية", 3, true, ["take key", "Insert the key"]),
+      opt("key", "المفتاح (مع Insert the key)", 3, false),
+      opt("name", "اسم بروفايل واحد (مع take key، فاضي = كل بروفايلاتك)", 3, false),
+    ],
+    keyper
   );
 
   return {
