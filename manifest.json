@@ -1,7 +1,7 @@
 {
   "name": "Per Profile",
-  "description": "حفظ وتطبيق بروفايلات السيرفر",
-  "authors": [{ "name": "you" }],
+  "description": "حفظ وتطبيق بروفايلات السيرفر ومشاركتها بمفتاح",
+  "authors": [{ "name": "Abujlmbo" }],
   "main": "index.js",
   "hash": "",
   "vendetta": { "icon": "ic_profile_24px" }
