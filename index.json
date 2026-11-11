@@ -1,11 +1,31 @@
-[
-  {
-    "name": "Per Profile",
-    "description": "حفظ وتطبيق بروفايلات السيرفر",
-    "authors": [{ "name": "you" }],
-    "main": "index.js",
-    "hash": "",
-    "vendetta": { "icon": "ic_profile_24px" },
-    "installUrl": "https://abujlmbo.github.io/save-profaile/"
+{
+  "format": 1,
+  "name": "Abujlmbo Plugins",
+  "description": "My plugins for Valenced",
+  "plugins": {
+    "abujlmbo.per-profile": {
+      "name": "Per Profile",
+      "description": "حفظ وتطبيق بروفايلات السيرفر",
+      "author": "Abujlmbo",
+      "icon": "ic_profile_24px",
+      "channels": {
+        "latest": "1.0.0"
+      },
+      "versions": {
+        "1.0.0": {
+          "url": "https://abujlmbo.github.io/save-profaile/pool/abujlmbo.per-profile@1.0.0.zip",
+          "sha256": "550ee01bc636c7af3593cf0ee2a76934a97999a823544c2229b90756bf3394ea",
+          "size": 8088,
+          "dependencies": {
+            "valenced.api": {
+              "version": ">=1 <2"
+            },
+            "discord": {
+              "version": "*"
+            }
+          }
+        }
+      }
+    }
   }
-]
+}
