@@ -3,6 +3,6 @@
   "description": "حفظ وتطبيق بروفايلات السيرفر ومشاركتها بمفتاح",
   "authors": [{ "name": "Abujlmbo" }],
   "main": "index.js",
-  "hash": "1",
+  "hash": "",
   "vendetta": { "icon": "ic_profile_24px" }
 }
