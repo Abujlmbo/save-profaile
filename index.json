@@ -9,13 +9,13 @@
       "author": "Abujlmbo",
       "icon": "ic_profile_24px",
       "channels": {
-        "latest": "1.0.6"
+        "latest": "1.0.7"
       },
       "versions": {
-        "1.0.6": {
-          "url": "https://abujlmbo.github.io/save-profaile/abujlmbo.per-profile@1.0.6.zip",
-          "sha256": "e90dae5660980308c51cfbbc884c757a82d1f2381fd2e195c3fcf2145d707c11",
-          "size": 12860,
+        "1.0.7": {
+          "url": "https://abujlmbo.github.io/save-profaile/abujlmbo.per-profile@1.0.7.zip",
+          "sha256": "784c8fd948ae785dbc3e7fc7856658624c5026e9d971e87e6e8651bfc40c5468",
+          "size": 16330,
           "dependencies": {
             "valenced.api": {
               "version": ">=1 <2"
