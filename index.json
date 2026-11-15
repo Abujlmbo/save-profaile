@@ -5,24 +5,20 @@
   "plugins": {
     "abujlmbo.per-profile": {
       "name": "Per Profile",
-      "description": "حفظ وتطبيق بروفايلات السيرفر",
+      "description": "Save and apply server profiles",
       "author": "Abujlmbo",
       "icon": "ic_profile_24px",
       "channels": {
-        "latest": "1.0.7"
+        "latest": "1.0.9"
       },
       "versions": {
-        "1.0.7": {
-          "url": "https://abujlmbo.github.io/save-profaile/abujlmbo.per-profile@1.0.7.zip",
-          "sha256": "784c8fd948ae785dbc3e7fc7856658624c5026e9d971e87e6e8651bfc40c5468",
-          "size": 16330,
+        "1.0.9": {
+          "url": "https://abujlmbo.github.io/save-profaile/abujlmbo.per-profile@1.0.9.zip",
+          "sha256": "581a900cae8783da540e04482ace2fe1e3801b46949f8542b667cfe7f0afffc7",
+          "size": 17146,
           "dependencies": {
-            "valenced.api": {
-              "version": ">=1 <2"
-            },
-            "discord": {
-              "version": "*"
-            }
+            "valenced.api": { "version": ">=1 <2" },
+            "discord": { "version": "*" }
           }
         }
       }
