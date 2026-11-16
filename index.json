@@ -8,14 +8,12 @@
       "description": "Save and apply server profiles",
       "author": "Abujlmbo",
       "icon": "ic_profile_24px",
-      "channels": {
-        "latest": "1.0.9"
-      },
+      "channels": { "latest": "1.0.10" },
       "versions": {
-        "1.0.9": {
-          "url": "https://abujlmbo.github.io/save-profaile/abujlmbo.per-profile@1.0.9.zip",
-          "sha256": "581a900cae8783da540e04482ace2fe1e3801b46949f8542b667cfe7f0afffc7",
-          "size": 17146,
+        "1.0.10": {
+          "url": "https://abujlmbo.github.io/save-profaile/abujlmbo.per-profile@1.0.10.zip",
+          "sha256": "286cee8d1f059c1c08096a2725838ac594bae55b60ee5fd95cdd8bb62c934418",
+          "size": 24752,
           "dependencies": {
             "valenced.api": { "version": ">=1 <2" },
             "discord": { "version": "*" }
