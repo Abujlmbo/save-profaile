@@ -1,12 +1,25 @@
-"channels": { "latest": "1.0.11" },
-"versions": {
-  "1.0.11": {
-    "url": "https://abujlmbo.github.io/save-profaile/abujlmbo.per-profile@1.0.11.zip",
-    "sha256": "c743f1f6ce0491ec0f3d5814ff181361f6bf3db697067b054947fecb8da832f0",
-    "size": 25342,
-    "dependencies": {
-      "valenced.api": { "version": ">=1 <2" },
-      "discord": { "version": "*" }
+{
+  "format": 1,
+  "name": "Abujlmbo Plugins",
+  "description": "My plugins for Valenced",
+  "plugins": {
+    "abujlmbo.per-profile": {
+      "name": "Per Profile",
+      "description": "Save and apply server profiles",
+      "author": "Abujlmbo",
+      "icon": "ic_profile_24px",
+      "channels": { "latest": "1.0.11" },
+      "versions": {
+        "1.0.11": {
+          "url": "https://abujlmbo.github.io/save-profaile/abujlmbo.per-profile@1.0.11.zip",
+          "sha256": "c743f1f6ce0491ec0f3d5814ff181361f6bf3db697067b054947fecb8da832f0",
+          "size": 25342,
+          "dependencies": {
+            "valenced.api": { "version": ">=1 <2" },
+            "discord": { "version": "*" }
+          }
+        }
+      }
     }
   }
 }
